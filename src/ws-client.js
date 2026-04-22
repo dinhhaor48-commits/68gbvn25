@@ -39,16 +39,8 @@ function connect() {
   console.log(`[WS] Đang kết nối ${WS_URL}...`);
   const ws = new WebSocket(WS_URL, {
     headers: {
-      "Origin": "https://68gbvn88.bar",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "Referer": "https://68gbvn88.bar/",
-      "Host": "cyanb90j.cq.qnwxdhwica.com",
-      "Pragma": "no-cache",
-      "Cache-Control": "no-cache",
-      "Accept-Language": "en-US,en;q=0.9",
-      "Accept-Encoding": "gzip, deflate, br",
-      "Sec-WebSocket-Version": "13",
-      "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
+      "Origin": "https://68gbvn25.bar",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
   });
 
