@@ -1,9 +1,51 @@
 const WebSocket = require("ws");
+const https = require("https");
 
-const WS_URL = "wss://cyanb90j.cq.qnwxdhwica.com:443";
+// WS URL lấy từ logon API (dynamic mỗi session)
+const LOGON_URL = "https://ovgbhbgkndt0nk9sr.au.qnwxdhwica.com/logon";
+const GAME_ORIGIN = "https://68gbvn25.bar";
 
 let results = [];
 let heartbeatInterval = null;
+
+function fetchWsUrl() {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ channel: 85 });
+    const url = new URL(LOGON_URL);
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(body),
+        "Origin": GAME_ORIGIN,
+        "Referer": GAME_ORIGIN + "/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      }
+    };
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => data += chunk);
+      res.on("end", () => {
+        try {
+          const json = JSON.parse(data);
+          console.log("[LOGON] Response:", JSON.stringify(json).substring(0, 200));
+          // Tìm WS URL trong response
+          const wsUrl = json.wsUrl || json.ws_url || json.url || json.host || json.server;
+          if (wsUrl) resolve(wsUrl.startsWith("wss://") ? wsUrl : "wss://" + wsUrl);
+          else resolve(null);
+        } catch(e) {
+          console.log("[LOGON] Raw:", data.substring(0, 300));
+          resolve(null);
+        }
+      });
+    });
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
 
 function hexToBytes(hex) {
   const bytes = [];
@@ -33,13 +75,14 @@ function toLooseAscii(bytes) {
   return s;
 }
 
-function connect() {
+function connectToUrl(WS_URL) {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
 
   console.log(`[WS] Đang kết nối ${WS_URL}...`);
   const ws = new WebSocket(WS_URL, {
     headers: {
-      "Origin": "https://68gbvn25.bar",
+      "Origin": GAME_ORIGIN,
+      "Referer": GAME_ORIGIN + "/",
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
   });
@@ -122,6 +165,23 @@ function connect() {
   });
 }
 
+async function connect() {
+  try {
+    console.log("[LOGON] Đang lấy WS URL...");
+    const wsUrl = await fetchWsUrl();
+    if (wsUrl) {
+      console.log("[LOGON] WS URL:", wsUrl);
+      connectToUrl(wsUrl);
+    } else {
+      // Fallback: thử URL cũ
+      console.log("[LOGON] Không lấy được URL, dùng fallback...");
+      connectToUrl("wss://ftph5a8pb69v0vnle.cq.qnwxdhwica.com:443");
+    }
+  } catch(e) {
+    console.error("[LOGON ERROR]", e.message);
+    setTimeout(connect, 5000);
+  }
+}
 function getResults() { return results; }
 
 module.exports = { connect, getResults };
