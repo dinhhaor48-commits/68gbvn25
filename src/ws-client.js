@@ -1,51 +1,13 @@
 const WebSocket = require("ws");
-const https = require("https");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
-// WS URL lấy từ logon API (dynamic mỗi session)
-const LOGON_URL = "https://ovgbhbgkndt0nk9sr.au.qnwxdhwica.com/logon";
 const GAME_ORIGIN = "https://68gbvn25.bar";
+const WS_URL = "wss://ftph5a8pb69v0vnle.cq.qnwxdhwica.com:443";
+// Nếu có proxy thì set env PROXY_URL=http://user:pass@host:port
+const PROXY_URL = process.env.PROXY_URL || null;
 
 let results = [];
 let heartbeatInterval = null;
-
-function fetchWsUrl() {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({ channel: 85 });
-    const url = new URL(LOGON_URL);
-    const options = {
-      hostname: url.hostname,
-      path: url.pathname,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(body),
-        "Origin": GAME_ORIGIN,
-        "Referer": GAME_ORIGIN + "/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-      }
-    };
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.on("data", chunk => data += chunk);
-      res.on("end", () => {
-        try {
-          const json = JSON.parse(data);
-          console.log("[LOGON] Response:", JSON.stringify(json).substring(0, 200));
-          // Tìm WS URL trong response
-          const wsUrl = json.wsUrl || json.ws_url || json.url || json.host || json.server;
-          if (wsUrl) resolve(wsUrl.startsWith("wss://") ? wsUrl : "wss://" + wsUrl);
-          else resolve(null);
-        } catch(e) {
-          console.log("[LOGON] Raw:", data.substring(0, 300));
-          resolve(null);
-        }
-      });
-    });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
-}
 
 function hexToBytes(hex) {
   const bytes = [];
@@ -79,27 +41,36 @@ function connectToUrl(WS_URL) {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
 
   console.log(`[WS] Đang kết nối ${WS_URL}...`);
-  const ws = new WebSocket(WS_URL, {
+  const wsOptions = {
     headers: {
       "Origin": GAME_ORIGIN,
       "Referer": GAME_ORIGIN + "/",
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
-  });
+  };
+  if (PROXY_URL) {
+    wsOptions.agent = new HttpsProxyAgent(PROXY_URL);
+    console.log("[WS] Dùng proxy:", PROXY_URL.replace(/:\/\/.*@/, "://***@"));
+  }
+  const ws = new WebSocket(WS_URL, wsOptions);
 
   ws.on("open", () => {
     console.log("[WS] Đã kết nối, đang handshake...");
 
-    // 1. Handshake sys
     ws.send(hexToBytes("010000727b22737973223a7b22706c6174666f726d223a226a732d776562736f636b6574222c22636c69656e744275696c644e756d626572223a22302e302e31222c22636c69656e7456657273696f6e223a223061323134383164373436663932663834323865316236646565623736666561227d7d"));
-
-    // 2. Heartbeat ack
     ws.send(hexToBytes("02000000"));
 
-    // 3. Auth (guest token)
+    // Auth với token
     ws.send(hexToBytes("0400004d01010001080210ca011a40393461633035333762663330343362313932373236656238636464333361326361303065386561616664393134616236383266663034366662306661383738654200"));
 
-    // Heartbeat mỗi 15s
+    // Vào game room ngay sau auth (không cần chờ trigger)
+    setTimeout(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        console.log("[WS] Gửi entergameroom...");
+        ws.send(hexToBytes("040000250004226d6e6d6473622e6d6e6d64736268616e646c65722e656e74657267616d65726f6f6d"));
+      }
+    }, 2000);
+
     heartbeatInterval = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(hexToBytes("02000000"));
@@ -111,12 +82,6 @@ function connectToUrl(WS_URL) {
     try {
       const bytes = new Uint8Array(data);
       const ascii = toLooseAscii(bytes);
-
-      // Sau khi auth xong, vào game room
-      if (ascii.includes("entergameroom") || ascii.includes("getgamelist")) {
-        // Gửi entergameroom
-        ws.send(hexToBytes("040000250004226d6e6d6473622e6d6e6d64736268616e646c65722e656e74657267616d65726f6f6d"));
-      }
 
       if (!ascii.includes("mnmdsbgameend")) return;
 
@@ -131,11 +96,17 @@ function connectToUrl(WS_URL) {
       for (let i = 0; i < bytes.length - 1; i++) {
         if (bytes[i] === 0x28) {
           const r = readVarint(bytes, i + 1);
-          if (r.value >= 30000 && r.value <= 50000) {
+          if (r.value >= 10000 && r.value <= 999999) {
             rawPeriod = r.value;
             break;
           }
         }
+      }
+
+      // Fallback: tìm số phiên trong ascii
+      if (!rawPeriod) {
+        const pm = ascii.match(/period[^\d]*(\d{5,})/i) || ascii.match(/(\d{5,8})/);
+        if (pm) rawPeriod = parseInt(pm[1]);
       }
 
       const entry = {
@@ -166,22 +137,9 @@ function connectToUrl(WS_URL) {
 }
 
 async function connect() {
-  try {
-    console.log("[LOGON] Đang lấy WS URL...");
-    const wsUrl = await fetchWsUrl();
-    if (wsUrl) {
-      console.log("[LOGON] WS URL:", wsUrl);
-      connectToUrl(wsUrl);
-    } else {
-      // Fallback: thử URL cũ
-      console.log("[LOGON] Không lấy được URL, dùng fallback...");
-      connectToUrl("wss://ftph5a8pb69v0vnle.cq.qnwxdhwica.com:443");
-    }
-  } catch(e) {
-    console.error("[LOGON ERROR]", e.message);
-    setTimeout(connect, 5000);
-  }
+  connectToUrl(WS_URL);
 }
+
 function getResults() { return results; }
 
 module.exports = { connect, getResults };
